@@ -1,0 +1,234 @@
+LAMMPS (23 Jun 2022 - Update 1)
+  using 1 OpenMP thread(s) per MPI task
+### Simulation of contact between two chain
+
+##################### Simulation setup ####################
+
+units micro                              # units
+dimension	3                            # dimension
+boundary	p p p                        # boundary condition p: periodic
+atom_style	sphere                       # atom style
+#processors * * 1
+
+####################### Parameter ##################################
+
+
+
+variable lat1 equal 3
+variable lat2 equal 3 #*(2^(1/2))
+variable d1 equal 3                     # Diamter of particle at bottom chain
+variable d2 equal 3
+
+variable n2e1 equal 5*v_d1              # Half length of top chain. 1500 is number of particles
+variable n1e1 equal v_n2e1*(v_lat1/v_lat2)              # Half length of bottom chain, which is 1.5 time larger than top chain
+variable n1e2 equal -v_n1e1
+variable n2e2 equal -v_n2e1
+#variable x_shift equal -0.25*v_d1
+
+variable den equal 2.2 #grams/cm^3      # micrometer^3=10^-12 cm^3 Density of materials
+
+variable V1 equal (1/6)*PI*(v_d1^3)     # Volume of particle 1
+variable V2 equal (1/6)*PI*(v_d1^3)
+
+variable mass1 equal v_den*v_V1  # Mass of particle 1 (picograms)
+variable mass2 equal v_den*v_V2
+
+# E GPa to picogram/(micrometer-microsecond^2)= 10^3 Pa= 10^-6 GPa
+# Force unit(picogram-micrometer/microsecond^2)=10^-9 N= 1nN
+# Spring stiffness (force/distance) 10^-3 N/m
+
+
+variable E equal 100*(10^6)                    # Young's Modulus using for Hertz/material model
+variable PR equal 0.3                          # Poisson's ratio using for Hertz/material model
+variable Fn equal -1000                        # Force apply to each particles in top chain
+variable dt equal 0.00001                      # Time step units microsecond
+variable lgv equal 0.5                         #damping for langevin thermostat for slider
+
+#variable x_shift equal -v_lat1/2
+
+################### Creating the model #################################
+lattice sc ${lat1}                                                               # Bottom chain type1
+lattice sc 3                                                               
+Lattice spacing in x,y,z = 3 3 3
+
+region box block ${n1e2} ${n1e1} -50 50 -50 50 units box
+region box block -15 ${n1e1} -50 50 -50 50 units box
+region box block -15 15 -50 50 -50 50 units box
+region substrate block ${n1e2} ${n1e1} -0.1 0.1 0 0.1 units box
+region substrate block -15 ${n1e1} -0.1 0.1 0 0.1 units box
+region substrate block -15 15 -0.1 0.1 0 0.1 units box
+
+create_box 2 box
+Created orthogonal box = (-15 -50 -50) to (15 50 50)
+  1 by 2 by 2 MPI processor grid
+create_atoms 1 region substrate
+Created 10 atoms
+  using lattice units in orthogonal box = (-15 -50 -50) to (15 50 50)
+  create_atoms CPU = 0.001 seconds
+
+lattice sc ${lat2}                                                             # Top chain type2
+lattice sc 3                                                             
+Lattice spacing in x,y,z = 3 3 3
+
+region slider1 block ${n2e2} ${n2e1} -0.1 0.1 5.9 6.1 units box
+region slider1 block -15 ${n2e1} -0.1 0.1 5.9 6.1 units box
+region slider1 block -15 15 -0.1 0.1 5.9 6.1 units box
+
+create_atoms 2 region slider1
+Created 10 atoms
+  using lattice units in orthogonal box = (-15 -50 -50) to (15 50 50)
+  create_atoms CPU = 0.005 seconds
+
+
+set type 1 diameter ${d1}                    # Set mass and diameter for each particles type
+set type 1 diameter 3                    
+Setting atom values ...
+  10 settings made for diameter
+set type 1 mass ${mass1}
+set type 1 mass 31.101767270539
+Setting atom values ...
+  10 settings made for mass
+set type 2 diameter ${d2}
+set type 2 diameter 3
+Setting atom values ...
+  10 settings made for diameter
+set type 2 mass ${mass2}
+set type 2 mass 31.101767270539
+Setting atom values ...
+  10 settings made for mass
+
+group substrate region substrate           # Define gorup
+10 atoms in group substrate
+group slider1 region slider1
+10 atoms in group slider1
+#displace_atoms slider1 move ${x_shift} 0.0 0.0
+#group substrate_slider union substrate slider1
+
+########################## Potential ###################################
+pair_style granular
+pair_coeff 1 1 hertz/material 0.00000001 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic
+pair_coeff 1 1 hertz/material 0.00000001 0.001 0.3 tangential mindlin NULL 0.1 0.01 damping viscoelastic
+pair_coeff 2 2 hertz/material 0.00000001 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic
+pair_coeff 2 2 hertz/material 0.00000001 0.001 0.3 tangential mindlin NULL 0.1 0.01 damping viscoelastic
+pair_coeff 1 2 hertz/material ${E} 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic
+pair_coeff 1 2 hertz/material 100000000 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic
+pair_coeff 1 2 hertz/material 100000000 0.001 0.3 tangential mindlin NULL 0.1 0.01 damping viscoelastic
+
+comm_modify     vel yes
+neigh_modify    delay 0 every 1 check yes
+
+### Compute properties ###
+
+compute 1 slider1 com                      # Compute the center of mass of top chain
+
+variable p0 equal "step"
+
+variable slider_z equal "c_1[3]"          # output the position of top chain in z-direction
+
+
+thermo 100000
+thermo_style custom step lx ly lz press pxx pyy pzz ke pe temp c_1[1] c_1[2] c_1[3]
+
+############### Fix ##################
+
+
+############## Equilibrium the system with apply force ########################
+
+fix force_slider1 slider1 setforce NULL 0 NULL                                # Fix top chain not to move in y-direction
+
+fix f_sub substrate freeze                                                    # Freeze the bottom chain
+
+#fix nve_slider1 slider1 nve                   # Integrate motion for slider1 group
+#fix lan_slider slider1 langevin 0 0 ${lgv} 6987532
+fix rigid_top slider1 rigid/nve group 1 slider1 langevin 0 0 ${lgv} 6987532   # NVE+langevin # NVE+langevin
+fix rigid_top slider1 rigid/nve group 1 slider1 langevin 0 0 0.5 6987532   
+  1 rigid bodies with 10 atoms
+
+fix add slider1 addforce 0 0 ${Fn} every 1                                    # Add force to top layer
+fix add slider1 addforce 0 0 -1000 every 1                                    
+
+timestep ${dt}
+timestep 1e-05
+
+dump 		D1 all custom 100000 Equi_0_*.dump id type diameter mass xu yu zu fx fy fz
+dump_modify D1 format 5 %.18g
+#dump_modify D1 format 6 %.18g
+dump_modify D1 format 7 %.18g
+
+run 3000000
+Generated 0 of 1 mixed pair_coeff terms from geometric mixing rule
+Neighbor list info ...
+  update every 1 steps, delay 0 steps, check yes
+  max neighbors/atom: 2000, page size: 100000
+  master list distance cutoff = 3.1
+  ghost atom cutoff = 3.1
+  binsize = 1.55, bins = 20 65 65
+  1 neighbor lists, perpetual/occasional/extra = 1 0 0
+  (1) pair granular, perpetual
+      attributes: half, newton on, size, history
+      pair build: half/size/bin/newton
+      stencil: half/bin/3d
+      bin: standard
+Per MPI rank memory allocation (min/avg/max) = 12.79 | 16.26 | 17.41 Mbytes
+   Step           Lx             Ly             Lz           Press           Pxx            Pyy            Pzz           KinEng         PotEng          Temp          c_1[1]         c_1[2]         c_1[3]    
+         0   30             100            100            0              0              0              0              0              0              0             -1.5            0              6            
+    100000   30             100            100            0.027683527   -9.6496563e-22  0              0.08305058     6036.4484      0              2.9147849e+11 -1.5            0              3.313778     
+    200000   30             100            100            0.010953048    1.5276085e-21  0              0.032859144    1748.6067      0              8.4433959e+10 -1.5            0              3.0495816    
+    300000   30             100            100            0.0030735879  -1.0353937e-22  0              0.0092207637   231.73236      0              1.1189526e+10 -1.5            0              3.0333567    
+    400000   30             100            100            0.0021208347  -1.299574e-22   0              0.006362504    123.37821      0              5.9574924e+09 -1.5            0              3.0006846    
+    500000   30             100            100           -0.0006677507   1.8846289e-21  0             -0.0020032521   18.085256      0              8.7327228e+08 -1.5            0              3.0006925    
+    600000   30             100            100            0.084466005    5.4808182e-22  0              0.25339802     1.1594359      0              55985010      -1.5            0              2.9988329    
+    700000   30             100            100            0.04691409     4.3806869e-22  0              0.14074227     0.3882404      0              18746739      -1.5            0              2.9992115    
+    800000   30             100            100            0.036909186    1.3270692e-22  0              0.11072756     0.072670134    0              3508980.7     -1.5            0              2.9993276    
+    900000   30             100            100            0.035484117    9.0440124e-23  0              0.10645235     0.0043802402   0              211506.12     -1.5            0              2.9993446    
+   1000000   30             100            100            0.034289804   -6.0294229e-24  0              0.10286941     1.9779447e-05  0              955.07872     -1.5            0              2.9993593    
+   1100000   30             100            100            0.033651204    4.6469568e-24  0              0.10095361     3.8660104e-05  0              1866.7581     -1.5            0              2.9993673    
+   1200000   30             100            100            0.033403401   -3.4049842e-24  0              0.1002102      2.0895468e-05  0              1008.9674     -1.5            0              2.9993704    
+   1300000   30             100            100            0.033331567    5.8469916e-25  0              0.099994702    4.3025913e-06  0              207.75673     -1.5            0              2.9993713    
+   1400000   30             100            100            0.033319252   -2.7901441e-28  0              0.099957757    4.9609989e-07  0              23.954888     -1.5            0              2.9993714    
+   1500000   30             100            100            0.033321117   -9.4041942e-26  0              0.09996335     2.8391249e-08  0              1.3709118     -1.5            0              2.9993714    
+   1600000   30             100            100            0.033323972    5.4221239e-26  0              0.099971917    1.4750682e-10  0              0.0071225763  -1.5            0              2.9993714    
+   1700000   30             100            100            0.033325541   -1.9965035e-26  0              0.099976623    2.2661969e-10  0              0.010942654   -1.5            0              2.9993714    
+   1800000   30             100            100            0.033326155    4.5606723e-27  0              0.099978465    1.2639931e-10  0              0.0061033705  -1.5            0              2.9993714    
+   1900000   30             100            100            0.033326334   -2.9723517e-29  0              0.099979003    2.6340668e-11  0              0.0012718966  -1.5            0              2.9993714    
+   2000000   30             100            100            0.033326366   -6.0010873e-28  0              0.099979097    3.0680559e-12  0              0.00014814544 -1.5            0              2.9993714    
+   2100000   30             100            100            0.033326361    3.6269608e-28  0              0.099979084    1.7850227e-13  0              8.6192356e-06 -1.5            0              2.9993714    
+   2200000   30             100            100            0.033326354   -1.3563268e-28  0              0.099979063    1.0466755e-15  0              5.0540215e-08 -1.5            0              2.9993714    
+   2300000   30             100            100            0.03332635     3.2000841e-29  0              0.099979051    1.3358569e-15  0              6.450375e-08  -1.5            0              2.9993714    
+   2400000   30             100            100            0.033326349   -7.7635976e-31  0              0.099979047    7.6324772e-16  0              3.6854501e-08 -1.5            0              2.9993714    
+   2500000   30             100            100            0.033326348   -3.8665551e-30  0              0.099979045    1.6089575e-16  0              7.7690801e-09 -1.5            0              2.9993714    
+   2600000   30             100            100            0.033326348    2.4166242e-30  0              0.099979045    1.8547702e-17  0              8.9560214e-10 -1.5            0              2.9993714    
+   2700000   30             100            100            0.033326348   -9.2148519e-31  0              0.099979045    1.6802253e-18  0              8.1132069e-11 -1.5            0              2.9993714    
+   2800000   30             100            100            0.033326348    2.2385584e-31  0              0.099979045    2.3050259e-20  0              1.1130145e-12 -1.5            0              2.9993714    
+   2900000   30             100            100            0.033326348   -9.1248093e-33  0              0.099979045    3.755279e-20   0              1.8132898e-12 -1.5            0              2.9993714    
+   3000000   30             100            100            0.033326348   -2.4839177e-32  0              0.099979045    5.4442544e-20  0              2.6288356e-12 -1.5            0              2.9993714    
+Loop time of 53.2937 on 4 procs for 3000000 steps with 20 atoms
+
+Performance: 48636179.928 ns/day, 0.000 hours/ns, 56291.875 timesteps/s
+99.9% CPU use with 4 MPI tasks x 1 OpenMP threads
+
+MPI task timing breakdown:
+Section |  min time  |  avg time  |  max time  |%varavg| %total
+---------------------------------------------------------------
+Pair    | 0.22712    | 1.4108     | 4.5741     | 153.9 |  2.65
+Neigh   | 0.0067212  | 0.0071879  | 0.0080672  |   0.6 |  0.01
+Comm    | 20.482     | 25.006     | 29.407     |  68.5 | 46.92
+Output  | 0.072163   | 0.072383   | 0.072573   |   0.1 |  0.14
+Modify  | 14.004     | 18.775     | 24.504     | 107.7 | 35.23
+Other   |            | 8.023      |            |       | 15.05
+
+Nlocal:              5 ave          20 max           0 min
+Histogram: 3 0 0 0 0 0 0 0 0 1
+Nghost:             21 ave          26 max           6 min
+Histogram: 1 0 0 0 0 0 0 0 0 3
+Neighs:            7.5 ave          30 max           0 min
+Histogram: 3 0 0 0 0 0 0 0 0 1
+
+Total # of neighbors = 30
+Ave neighs/atom = 1.5
+Neighbor list builds = 174
+Dangerous builds = 0
+
+undump D1
+
+Total wall time: 0:00:53

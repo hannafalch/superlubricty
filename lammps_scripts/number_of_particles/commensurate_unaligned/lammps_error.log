@@ -1,0 +1,6 @@
+slurmstepd-compute-11: error: *** STEP 1776280.0 ON compute-11 CANCELLED AT 2025-05-14T23:48:09 DUE TO TIME LIMIT ***
+slurmstepd-compute-11: error: *** JOB 1776280 ON compute-11 CANCELLED AT 2025-05-14T23:48:09 DUE TO TIME LIMIT ***
+srun: Job step aborted: Waiting up to 62 seconds for job step to finish.
+srun: got SIGCONT
+srun: forcing job termination
+srun: error: compute-11: tasks 0-3: Terminated
