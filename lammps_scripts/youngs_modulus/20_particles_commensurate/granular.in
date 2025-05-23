@@ -1,0 +1,119 @@
+### Simulation of contact between two chain
+
+##################### Simulation setup ####################
+
+units micro                              # units
+dimension	3                            # dimension 
+boundary	p p p                        # boundary condition p: periodic
+atom_style	sphere                       # atom style
+#processors * * 1
+
+####################### Parameter ##################################
+
+variable ind equal ${num}
+
+variable lat1 equal 3 #*(2^(1/2))
+variable lat2 equal 3
+variable d1 equal 3                      # Diamter of particle at bottom chain
+variable d2 equal 3                      # Diamter of particle at upper chain
+
+variable n2e1 equal 10*v_lat1              # Half length of top chain. 1500 is number of particles    
+variable n1e1 equal v_n2e1*(v_lat1/v_lat2)              # Half length of bottom chain, which is 1.5 time larger than top chain 
+variable n1e2 equal -v_n1e1                  
+variable n2e2 equal -v_n2e1
+#variable x_shift equal -0.25*v_d1
+
+variable den equal 2.2 #grams/cm^3      # micrometer^3=10^-12 cm^3 Density of materials
+
+variable V1 equal (1/6)*PI*(v_d1^3)     # Volume of particle 1
+variable V2 equal (1/6)*PI*(v_d2^3)     # Volume of particle 2
+
+variable mass1 equal v_den*v_V1  # Mass of particle 1 (picograms)
+variable mass2 equal v_den*v_V2  # Mass of particle 2 (picograms)
+
+# E GPa to picogram/(micrometer-microsecond^2)= 10^3 Pa= 10^-6 GPa
+# Force unit(picogram-micrometer/microsecond^2)=10^-9 N= 1nN
+# Spring stiffness (force/distance) 10^-3 N/m 
+
+
+variable E equal (10+(5*v_ind))*(10^6)                    # Young's Modulus using for Hertz/material model
+variable PR equal 0.3                          # Poisson's ratio using for Hertz/material model
+variable Fn equal -1000                        # Force apply to each particles in top chain
+variable dt equal 0.00001                      # Time step units microsecond 
+variable lgv equal 0.5                         #damping for langevin thermostat for slider
+
+
+
+################### Creating the model ################################# 
+lattice sc ${lat1}                                                               # Bottom chain type1
+
+region box block ${n1e2} ${n1e1} -50 50 -50 50 units box
+region substrate block ${n1e2} ${n1e1} -0.1 0.1 0 0.1 units box
+
+create_box 2 box
+create_atoms 1 region substrate
+
+lattice sc ${lat2}                                                             # Top chain type2
+
+region slider1 block ${n2e2} ${n2e1} -0.1 0.1 5.9 6.1 units box
+
+create_atoms 2 region slider1
+
+
+set type 1 diameter ${d1}                    # Set mass and diameter for each particles type
+set type 1 mass ${mass1}
+set type 2 diameter ${d2}                    # Set mass and diameter for each particles type
+set type 2 mass ${mass2}
+
+
+group substrate region substrate           # Define gorup 
+group slider1 region slider1
+#displace_atoms slider1 move ${x_shift} 0.0 0.0
+#group substrate_slider union substrate slider1
+
+########################## Potential ###################################
+pair_style granular
+pair_coeff 1 1 hertz/material 0.00000001 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic 
+pair_coeff 2 2 hertz/material 0.00000001 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic 
+pair_coeff 1 2 hertz/material ${E} 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic
+
+comm_modify     vel yes
+neigh_modify    delay 0 every 1 check yes
+
+### Compute properties ###
+
+compute 1 slider1 com                      # Compute the center of mass of top chain
+
+variable p0 equal "step"                   
+
+variable slider_z equal "c_1[3]"          # output the position of top chain in z-direction
+
+
+thermo 100000
+thermo_style custom step lx ly lz press pxx pyy pzz ke pe temp c_1[1] c_1[2] c_1[3] 
+
+############### Fix ##################
+
+
+############## Equilibrium the system with apply force ########################
+
+fix force_slider1 slider1 setforce NULL 0 NULL                                # Fix top chain not to move in y-direction
+
+fix f_sub substrate freeze                                                    # Freeze the bottom chain
+        
+#fix nve_slider1 slider1 nve                   # Integrate motion for slider1 group
+#fix lan_slider slider1 langevin 0 0 ${lgv} 6987532
+fix rigid_top slider1 rigid/nve group 1 slider1 langevin 0 0 ${lgv} 6987532   # NVE+langevin
+
+fix add slider1 addforce 0 0 ${Fn} every 1                                    # Add force to top layer
+
+timestep ${dt}
+
+dump 		D1 all custom 100000 Equi_${num}_*.dump id type diameter mass xu yu zu fx fy fz 
+dump_modify D1 format 5 %.12g
+dump_modify D1 format 7 %.12g
+
+run 3000000
+
+undump D1
+
