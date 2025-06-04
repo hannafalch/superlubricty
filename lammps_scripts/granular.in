@@ -1,0 +1,136 @@
+
+### Simulation of contact between two rigid chains of particles
+
+##################### Simulation setup ####################
+
+units micro                           # units
+dimension	3                           # dimension 
+boundary	p p p                        # boundary condition p: periodic
+atom_style	sphere                     # atom style
+#processors * * 1
+
+####################### Parameters ##################################
+
+# Set lattice distance in the particle chains
+variable lat1 equal 3             # Bottom chain
+variable lat2 equal 3             # Top chain
+
+# Set the diameters of the particles
+variable d1 equal 3                      
+variable d2 equal 3                      
+
+# Set half-length of the chains
+variable n2e1 equal 500*v_lat2              
+variable n1e1 equal v_n2e1*(v_lat1/v_lat2) 
+
+# Set simulation bounds
+variable n1e2 equal -v_n1e1                  
+variable n2e2 equal -v_n2e1
+
+# Set length of displacement (if wanted)
+#variable x_shift equal -0.25*v_d1
+
+# Set density, volume and mass of the particles
+variable den equal 2.2 #grams/cm^3      # Density of materials
+variable V1 equal (1/6)*PI*(v_d1^3)     # Volume of particle 1
+variable V2 equal (1/6)*PI*(v_d2^3)     # Volume of particle 2
+variable mass1 equal v_den*v_V1         # Mass of particle 1 (picograms)
+variable mass2 equal v_den*v_V2         # Mass of particle 2 (picograms)
+
+# Set other variables
+variable E equal 100*(10^6)            # Young's Modulus 
+variable PR equal 0.3                  # Poisson's ratio
+variable Fn equal -1000                # Force applied to each particle in top chain
+variable dt equal 0.00001              # Time step (microseconds)
+variable lgv equal 0.5                 # Damping for langevin thermostat
+
+
+################### Creating the model ################################# 
+# Create the simulation box                                                           
+region box block ${n1e2} ${n1e1} -50 50 -50 50 units box
+create_box 2 box
+
+
+# Create and place the bottom chain with particles of type 1
+lattice sc ${lat1}   
+region substrate block ${n1e2} ${n1e1} -0.1 0.1 0 0.1 units box
+create_atoms 1 region substrate
+
+
+# Create and place the top chain with particles of type 2
+lattice sc ${lat2}
+region slider1 block ${n2e2} ${n2e1} -0.1 0.1 5.9 6.1 units box
+create_atoms 2 region slider1
+
+# Set mass and diameter for each type of particle
+set type 1 diameter ${d1}                    
+set type 1 mass ${mass1}
+set type 2 diameter ${d2}                    
+set type 2 mass ${mass2}
+
+# Group the particles
+group substrate region substrate           
+group slider1 region slider1
+#group substrate_slider union substrate slider1
+
+# Displace atoms in group (if wanted)
+#displace_atoms slider1 move ${x_shift} 0.0 0.0
+
+
+
+########################## Potential ###################################
+# Choose how to calculate the pair potential
+pair_style granular
+
+# Set the parameters for interaction between the different particles, 1-1, 1-2, 2-2
+pair_coeff 1 1 hertz/material 0.00000001 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic 
+pair_coeff 2 2 hertz/material 0.00000001 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic 
+pair_coeff 1 2 hertz/material ${E} 0.001 ${PR} tangential mindlin NULL 0.1 0.01 damping viscoelastic
+
+# Communicate velocity info with ghost atoms
+comm_modify     vel yes
+
+# Set build and use of pairwise neighbor lists
+neigh_modify    delay 0 every 1 check yes
+
+# Compute properties 
+# Centre of mass for top chain
+compute 1 slider1 com                                   
+
+# Find position of top chain in z-direction
+variable slider_z equal "c_1[3]"          
+
+# Compute and print thermodynamic information
+thermo 100000
+thermo_style custom step lx ly lz press pxx pyy pzz ke pe temp c_1[1] c_1[2] c_1[3] 
+
+
+############# Equilibrium the system with applied force #####################
+
+# Fix top chain not to move in y-direction
+fix force_slider1 slider1 setforce NULL 0 NULL    
+
+# Freeze the bottom chain
+fix f_sub substrate freeze                                                    
+        
+# Apply Langevin thermostat (nve ensemble)
+fix rigid_top slider1 rigid/nve group 1 slider1 langevin 0 0 ${lgv} 6987532  
+
+# Apply external force to the top chain every timestep
+fix add slider1 addforce 0 0 ${Fn} every 1                                    
+
+# Set the timestep
+timestep ${dt}
+
+# Create .dump files with information about the system every 100000 timestep
+dump 		D1 all custom 100000 Equi_${num}_*.dump id type diameter mass xu yu zu fx fy fz 
+
+% modify accuracy of position in x- and z-direction
+dump_modify D1 format 5 %.18g
+dump_modify D1 format 7 %.18g
+
+
+# run the system for 3000000 timesteps
+run 3000000
+
+undump D1
